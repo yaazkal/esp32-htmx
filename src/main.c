@@ -29,7 +29,7 @@
 // Must be a 2.4GHz network — the ESP32 radio does not support 5GHz.
 #define WIFI_SSID ""
 #define WIFI_PASSWORD ""
-#define WIFI_MAX_RETRY 30
+#define WIFI_MAX_RETRY 10
 
 // GPIO2 drives the onboard blue LED on the esp32doit-devkit-v1 board.
 #define LED_PIN GPIO_NUM_2
