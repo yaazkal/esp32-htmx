@@ -51,6 +51,12 @@
             Blink
           </button>
         </div>
+
+        <div class="stat">
+          <h2>Dice roll</h2>
+          <div class="value" id="dice" hx-get="/api/dice" hx-trigger="load" hx-swap="innerHTML">&hellip;</div>
+          <button hx-get="/api/dice" hx-target="#dice" hx-swap="innerHTML">Roll</button>
+        </div>
       </div>
     </main>
   </body>

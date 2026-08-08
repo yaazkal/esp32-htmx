@@ -10,6 +10,7 @@
 #include "esp_http_server.h"
 #include "esp_log.h"
 #include "esp_netif.h"
+#include "esp_random.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
 #include "nvs_flash.h"
@@ -247,6 +248,16 @@ static esp_err_t blink_get_handler(httpd_req_t *req) {
   return send_text_response(req, buf, len, false);
 }
 
+// Backs the "Dice roll" card. esp_random() draws from the ESP32's hardware
+// RNG (seeded by RF/thermal noise), not a software PRNG, so this is a real
+// hardware feature demo rather than just math.
+static esp_err_t dice_get_handler(httpd_req_t *req) {
+  int roll = (esp_random() % 6) + 1;
+  char buf[8];
+  int len = snprintf(buf, sizeof(buf), "%d", roll);
+  return send_text_response(req, buf, len, true);
+}
+
 // To add a future route: write a handler function and append an entry here
 // — start_webserver() below registers whatever is in this table.
 static const httpd_uri_t routes[] = {
@@ -258,12 +269,14 @@ static const httpd_uri_t routes[] = {
     {.uri = "/api/wifi", .method = HTTP_GET, .handler = wifi_get_handler},
     {.uri = "/api/tasks", .method = HTTP_GET, .handler = tasks_get_handler},
     {.uri = "/api/blink", .method = HTTP_GET, .handler = blink_get_handler},
+    {.uri = "/api/dice", .method = HTTP_GET, .handler = dice_get_handler},
 };
 
 // Starts the HTTP server and registers every route in the table above.
 static void start_webserver(void) {
   httpd_handle_t server = NULL;
   httpd_config_t config = HTTPD_DEFAULT_CONFIG(); // listens on TCP port 80 by default
+  config.max_uri_handlers = sizeof(routes) / sizeof(routes[0]); // default of 8 is too small for our route table
 
   ESP_ERROR_CHECK(httpd_start(&server, &config));
   for (size_t i = 0; i < sizeof(routes) / sizeof(routes[0]); i++) {
