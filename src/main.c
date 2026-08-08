@@ -166,28 +166,34 @@ static esp_err_t htmx_get_handler(httpd_req_t *req) {
 // so it skips the LED flash, which would otherwise just be constant noise
 // rather than a meaningful signal.
 
-static esp_err_t uptime_get_handler(httpd_req_t *req) {
-  gpio_set_level(LED_PIN, 1);
-  int64_t uptime_seconds = esp_timer_get_time() / 1000000;
-  char buf[32];
-  int len = snprintf(buf, sizeof(buf), "%lld s", uptime_seconds);
+// Shared tail for the four handlers below: sends buf/len as an HTML
+// fragment, optionally flashing the LED first to mark a user-triggered
+// request (see the comment above for which handlers want that).
+static esp_err_t send_text_response(httpd_req_t *req, const char *buf, int len, bool flash_led) {
+  if (flash_led) {
+    gpio_set_level(LED_PIN, 1);
+  }
   httpd_resp_set_type(req, "text/html");
   httpd_resp_send(req, buf, len);
-  vTaskDelay(pdMS_TO_TICKS(100)); // keep the LED on just long enough to see it blink
-  gpio_set_level(LED_PIN, 0);
+  if (flash_led) {
+    vTaskDelay(pdMS_TO_TICKS(100)); // keep the LED on just long enough to see it blink
+    gpio_set_level(LED_PIN, 0);
+  }
   return ESP_OK;
 }
 
+static esp_err_t uptime_get_handler(httpd_req_t *req) {
+  int64_t uptime_seconds = esp_timer_get_time() / 1000000;
+  char buf[32];
+  int len = snprintf(buf, sizeof(buf), "%lld s", uptime_seconds);
+  return send_text_response(req, buf, len, true);
+}
+
 static esp_err_t heap_get_handler(httpd_req_t *req) {
-  gpio_set_level(LED_PIN, 1);
   uint32_t free_heap = esp_get_free_heap_size();
   char buf[32];
   int len = snprintf(buf, sizeof(buf), "%lu bytes", (unsigned long)free_heap);
-  httpd_resp_set_type(req, "text/html");
-  httpd_resp_send(req, buf, len);
-  vTaskDelay(pdMS_TO_TICKS(100));
-  gpio_set_level(LED_PIN, 0);
-  return ESP_OK;
+  return send_text_response(req, buf, len, true);
 }
 
 static esp_err_t wifi_get_handler(httpd_req_t *req) {
@@ -195,46 +201,37 @@ static esp_err_t wifi_get_handler(httpd_req_t *req) {
   esp_wifi_sta_get_ap_info(&ap_info); // same struct used by wifi_scan() above
   char buf[32];
   int len = snprintf(buf, sizeof(buf), "%d dBm", ap_info.rssi);
-  httpd_resp_set_type(req, "text/html");
-  httpd_resp_send(req, buf, len);
-  return ESP_OK;
+  return send_text_response(req, buf, len, false);
 }
 
 static esp_err_t tasks_get_handler(httpd_req_t *req) {
-  gpio_set_level(LED_PIN, 1);
   UBaseType_t task_count = uxTaskGetNumberOfTasks(); // one per driver/event-loop/httpd worker, plus app_main's own
   char buf[32];
   int len = snprintf(buf, sizeof(buf), "%u tasks", (unsigned int)task_count);
-  httpd_resp_set_type(req, "text/html");
-  httpd_resp_send(req, buf, len);
-  vTaskDelay(pdMS_TO_TICKS(100));
-  gpio_set_level(LED_PIN, 0);
-  return ESP_OK;
+  return send_text_response(req, buf, len, true);
 }
 
-static const httpd_uri_t root_uri = {.uri = "/", .method = HTTP_GET, .handler = root_get_handler};
-static const httpd_uri_t style_uri = {.uri = "/style.css", .method = HTTP_GET, .handler = style_get_handler};
-static const httpd_uri_t htmx_uri = {.uri = "/htmx.min.js", .method = HTTP_GET, .handler = htmx_get_handler};
-static const httpd_uri_t uptime_uri = {.uri = "/api/uptime", .method = HTTP_GET, .handler = uptime_get_handler};
-static const httpd_uri_t heap_uri = {.uri = "/api/heap", .method = HTTP_GET, .handler = heap_get_handler};
-static const httpd_uri_t wifi_uri = {.uri = "/api/wifi", .method = HTTP_GET, .handler = wifi_get_handler};
-static const httpd_uri_t tasks_uri = {.uri = "/api/tasks", .method = HTTP_GET, .handler = tasks_get_handler};
+// To add a future route: write a handler function and append an entry here
+// — start_webserver() below registers whatever is in this table.
+static const httpd_uri_t routes[] = {
+    {.uri = "/", .method = HTTP_GET, .handler = root_get_handler},
+    {.uri = "/style.css", .method = HTTP_GET, .handler = style_get_handler},
+    {.uri = "/htmx.min.js", .method = HTTP_GET, .handler = htmx_get_handler},
+    {.uri = "/api/uptime", .method = HTTP_GET, .handler = uptime_get_handler},
+    {.uri = "/api/heap", .method = HTTP_GET, .handler = heap_get_handler},
+    {.uri = "/api/wifi", .method = HTTP_GET, .handler = wifi_get_handler},
+    {.uri = "/api/tasks", .method = HTTP_GET, .handler = tasks_get_handler},
+};
 
-// Starts the HTTP server and maps each URL path to its handler. To add a
-// future route: write a handler function, declare a httpd_uri_t for it, and
-// register it here the same way.
+// Starts the HTTP server and registers every route in the table above.
 static void start_webserver(void) {
   httpd_handle_t server = NULL;
   httpd_config_t config = HTTPD_DEFAULT_CONFIG(); // listens on TCP port 80 by default
 
   ESP_ERROR_CHECK(httpd_start(&server, &config));
-  ESP_ERROR_CHECK(httpd_register_uri_handler(server, &root_uri));
-  ESP_ERROR_CHECK(httpd_register_uri_handler(server, &style_uri));
-  ESP_ERROR_CHECK(httpd_register_uri_handler(server, &htmx_uri));
-  ESP_ERROR_CHECK(httpd_register_uri_handler(server, &uptime_uri));
-  ESP_ERROR_CHECK(httpd_register_uri_handler(server, &heap_uri));
-  ESP_ERROR_CHECK(httpd_register_uri_handler(server, &wifi_uri));
-  ESP_ERROR_CHECK(httpd_register_uri_handler(server, &tasks_uri));
+  for (size_t i = 0; i < sizeof(routes) / sizeof(routes[0]); i++) {
+    ESP_ERROR_CHECK(httpd_register_uri_handler(server, &routes[i]));
+  }
   ESP_LOGI(TAG, "HTTP server started");
 }
 
