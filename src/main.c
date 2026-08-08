@@ -1,9 +1,11 @@
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 
 #include "esp_chip_info.h"
@@ -18,6 +20,8 @@
 
 #include "driver/gpio.h"
 #include "driver/ledc.h"
+
+#include "gc9a01.h"
 
 // index.html/style.css/htmx.min.js.gz as C byte arrays, generated via
 // `xxd -i` from the files sitting alongside this one — see
@@ -62,6 +66,13 @@ static void led_set_percent(uint8_t percent) {
   ledc_update_duty(LED_LEDC_MODE, LED_LEDC_CHANNEL);
   s_led_percent = percent;
 }
+
+// Single source of truth for the GC9A01 marquee text, guarded by a mutex
+// since it's written by httpd worker(s) and read by marquee_task (see
+// below) — unlike s_led_percent, this crosses task boundaries, so it needs
+// real locking, not just a plain static.
+static char s_marquee_text[64] = "HACKLAB ORIENTE";
+static SemaphoreHandle_t s_marquee_mutex;
 
 // FreeRTOS event group used to block app_main() until WiFi either connects
 // or gives up. The WiFi driver runs in its own background tasks and reports
@@ -301,6 +312,88 @@ static esp_err_t led_get_handler(httpd_req_t *req) {
   return send_text_response(req, buf, len, false);
 }
 
+// Decodes a application/x-www-form-urlencoded string (as htmx sends form
+// values in query strings): '+' -> space, "%XX" -> byte. httpd_query_key_value
+// (used by marquee_get_handler below) extracts the raw substring but does not
+// decode it. Bounds-checked against both ends: never reads past src's null
+// terminator (the isxdigit checks short-circuit before a lone trailing '%'
+// or '%X' could read out of bounds), and never writes past dst_cap - 1.
+static void url_decode(const char *src, char *dst, size_t dst_cap) {
+  size_t o = 0;
+  for (size_t i = 0; src[i] != '\0' && o < dst_cap - 1; i++) {
+    if (src[i] == '+') {
+      dst[o++] = ' ';
+    } else if (src[i] == '%' && isxdigit((unsigned char)src[i + 1]) && isxdigit((unsigned char)src[i + 2])) {
+      char hex[3] = {src[i + 1], src[i + 2], '\0'};
+      dst[o++] = (char)strtol(hex, NULL, 16);
+      i += 2;
+    } else {
+      dst[o++] = src[i];
+    }
+  }
+  dst[o] = '\0';
+}
+
+// Owns all drawing to the GC9A01: copies the current marquee text out under
+// the mutex (never holds it during the slow SPI transfer), draws one frame,
+// advances the scroll position, and waits before drawing the next one. This
+// is the only task that ever touches the display/SPI bus.
+static void marquee_task(void *arg) {
+  int x_offset = GC9A01_WIDTH;
+  char local_text[sizeof(s_marquee_text)];
+  char prev_text[sizeof(s_marquee_text)] = "";
+
+  while (1) {
+    xSemaphoreTake(s_marquee_mutex, portMAX_DELAY);
+    snprintf(local_text, sizeof(local_text), "%s", s_marquee_text);
+    xSemaphoreGive(s_marquee_mutex);
+
+    if (strcmp(local_text, prev_text) != 0) {
+      // The message changed -- restart the scroll from the right edge
+      // instead of wherever the previous message's scroll happened to be,
+      // so the new text is visible right away instead of waiting for the
+      // old scroll cycle to wrap back around.
+      x_offset = GC9A01_WIDTH;
+      snprintf(prev_text, sizeof(prev_text), "%s", local_text);
+    }
+
+    gc9a01_draw_marquee_frame(local_text, x_offset, GC9A01_FG_COLOR, GC9A01_BG_COLOR);
+
+    x_offset -= 2;
+    if (x_offset < -gc9a01_marquee_text_width_px(local_text)) {
+      x_offset = GC9A01_WIDTH; // text has fully scrolled off -- restart from the right edge
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(30));
+  }
+}
+
+// Backs the "Marquee" card. Takes an optional `text` query param (from the
+// text input in index.html) and sets the scrolling message. Called with no
+// `text` (e.g. on page load) to just report the current message without
+// changing it — same optional-param shape as led_get_handler above.
+static esp_err_t marquee_get_handler(httpd_req_t *req) {
+  char query[192];
+  char raw_val[192];
+  if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK &&
+      httpd_query_key_value(query, "text", raw_val, sizeof(raw_val)) == ESP_OK) {
+    char decoded[sizeof(s_marquee_text)];
+    url_decode(raw_val, decoded, sizeof(decoded));
+    xSemaphoreTake(s_marquee_mutex, portMAX_DELAY);
+    snprintf(s_marquee_text, sizeof(s_marquee_text), "%s", decoded);
+    xSemaphoreGive(s_marquee_mutex);
+  }
+
+  char current[sizeof(s_marquee_text)];
+  xSemaphoreTake(s_marquee_mutex, portMAX_DELAY);
+  snprintf(current, sizeof(current), "%s", s_marquee_text);
+  xSemaphoreGive(s_marquee_mutex);
+
+  char buf[96];
+  int len = snprintf(buf, sizeof(buf), "Showing: %s", current);
+  return send_text_response(req, buf, len, true);
+}
+
 // Backs the "Dice roll" card. esp_random() draws from the ESP32's hardware
 // RNG (seeded by RF/thermal noise), not a software PRNG, so this is a real
 // hardware feature demo rather than just math.
@@ -355,6 +448,7 @@ static const httpd_uri_t routes[] = {
     {.uri = "/api/dice", .method = HTTP_GET, .handler = dice_get_handler},
     {.uri = "/api/chipinfo", .method = HTTP_GET, .handler = chipinfo_get_handler},
     {.uri = "/api/led", .method = HTTP_GET, .handler = led_get_handler},
+    {.uri = "/api/marquee", .method = HTTP_GET, .handler = marquee_get_handler},
 };
 
 // Starts the HTTP server and registers every route in the table above.
@@ -401,6 +495,13 @@ void app_main(void) {
       .hpoint = 0,
   };
   ESP_ERROR_CHECK(ledc_channel_config(&ledc_channel));
+
+  // The display is independent of WiFi/the web server -- bring it up and
+  // start scrolling the default message regardless of how the connection
+  // attempt below turns out.
+  ESP_ERROR_CHECK(gc9a01_init());
+  s_marquee_mutex = xSemaphoreCreateMutex();
+  xTaskCreate(marquee_task, "marquee", 4096, NULL, 5, NULL);
 
   if (!wifi_connect()) {
     // Gave up after WIFI_MAX_RETRY attempts. Common causes: wrong

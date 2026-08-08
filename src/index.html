@@ -76,6 +76,15 @@
             hx-sync="this:replace"
           />
         </div>
+
+        <div class="stat">
+          <h2>Marquee</h2>
+          <div class="value" id="marquee-status" hx-get="/api/marquee" hx-trigger="load" hx-swap="innerHTML">&hellip;</div>
+          <input type="text" id="marquee-text" name="text" maxlength="63" placeholder="Type a message" value="HACKLAB ORIENTE" />
+          <button hx-get="/api/marquee" hx-include="#marquee-text" hx-target="#marquee-status" hx-swap="innerHTML">
+            Show
+          </button>
+        </div>
       </div>
     </main>
   </body>

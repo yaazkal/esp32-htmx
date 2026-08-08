@@ -69,7 +69,8 @@ button:hover {
   background: #7dd3fc;
 }
 
-input[type="number"] {
+input[type="number"],
+input[type="text"] {
   width: 100%;
   background: #1e293b;
   border: 1px solid #334155;
