@@ -17,6 +17,7 @@
 #include "nvs_flash.h"
 
 #include "driver/gpio.h"
+#include "driver/ledc.h"
 
 // index.html/style.css/htmx.min.js.gz as C byte arrays, generated via
 // `xxd -i` from the files sitting alongside this one — see
@@ -32,13 +33,35 @@
 #define WIFI_PASSWORD ""
 #define WIFI_MAX_RETRY 10
 
-// GPIO2 drives the onboard blue LED on the esp32doit-devkit-v1 board.
+// GPIO2 drives the onboard blue LED on the esp32doit-devkit-v1 board. Driven
+// via LEDC (PWM) rather than plain gpio_set_level so the brightness slider
+// (see led_set_percent below) and the existing on/off blink patterns share
+// one control path instead of fighting over the pin.
 #define LED_PIN GPIO_NUM_2
+#define LED_LEDC_MODE LEDC_LOW_SPEED_MODE
+#define LED_LEDC_TIMER LEDC_TIMER_0
+#define LED_LEDC_CHANNEL LEDC_CHANNEL_0
+#define LED_LEDC_DUTY_RES LEDC_TIMER_8_BIT // 0-255
+#define LED_LEDC_FREQ_HZ 5000
 
 // Upper bound on user-requested blink counts (see blink_get_handler below).
 #define BLINK_MAX_COUNT 10
 
 static const char *TAG = "H< Buddy";
+
+// Single source of truth for the LED's current brightness (0-100), so every
+// blink/flash call site can save it before overriding the LED and restore it
+// afterward instead of leaving the pin hard off.
+static uint8_t s_led_percent = 0;
+
+static void led_set_percent(uint8_t percent) {
+  if (percent > 100) {
+    percent = 100;
+  }
+  ledc_set_duty(LED_LEDC_MODE, LED_LEDC_CHANNEL, (uint32_t)percent * 255 / 100);
+  ledc_update_duty(LED_LEDC_MODE, LED_LEDC_CHANNEL);
+  s_led_percent = percent;
+}
 
 // FreeRTOS event group used to block app_main() until WiFi either connects
 // or gives up. The WiFi driver runs in its own background tasks and reports
@@ -56,7 +79,9 @@ static int s_retry_count = 0;
 static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data) {
   if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
     if (s_retry_count < WIFI_MAX_RETRY) {
-      gpio_set_level(LED_PIN, !gpio_get_level(LED_PIN)); // blink LED once per retry
+      static bool s_blink_on = false;
+      s_blink_on = !s_blink_on;
+      led_set_percent(s_blink_on ? 100 : 0); // blink LED once per retry
       esp_wifi_connect();
       s_retry_count++;
       ESP_LOGI(TAG, "retrying WiFi connection (%d/%d)", s_retry_count, WIFI_MAX_RETRY);
@@ -176,14 +201,15 @@ static esp_err_t htmx_get_handler(httpd_req_t *req) {
 // fragment, optionally flashing the LED first to mark a user-triggered
 // request (see the comment above for which handlers want that).
 static esp_err_t send_text_response(httpd_req_t *req, const char *buf, int len, bool flash_led) {
+  uint8_t saved_percent = s_led_percent;
   if (flash_led) {
-    gpio_set_level(LED_PIN, 1);
+    led_set_percent(100);
   }
   httpd_resp_set_type(req, "text/html");
   httpd_resp_send(req, buf, len);
   if (flash_led) {
     vTaskDelay(pdMS_TO_TICKS(100)); // keep the LED on just long enough to see it blink
-    gpio_set_level(LED_PIN, 0);
+    led_set_percent(saved_percent); // restore whatever brightness was set before the flash
   }
   return ESP_OK;
 }
@@ -237,15 +263,41 @@ static esp_err_t blink_get_handler(httpd_req_t *req) {
     count = BLINK_MAX_COUNT;
   }
 
+  uint8_t saved_percent = s_led_percent;
   for (int i = 0; i < count; i++) {
-    gpio_set_level(LED_PIN, 1);
+    led_set_percent(100);
     vTaskDelay(pdMS_TO_TICKS(150));
-    gpio_set_level(LED_PIN, 0);
+    led_set_percent(0);
     vTaskDelay(pdMS_TO_TICKS(150));
   }
+  led_set_percent(saved_percent); // restore whatever brightness was set before blinking
 
   char buf[32];
   int len = snprintf(buf, sizeof(buf), "Blinked %d time%s", count, count == 1 ? "" : "s");
+  return send_text_response(req, buf, len, false);
+}
+
+// Backs the "LED brightness" card. Takes an optional `level` query param
+// (0-100, from the range input in index.html) and sets the LED's PWM
+// brightness. Called with no `level` (e.g. on page load) to just report the
+// current brightness without changing it. No LED flash — the brightness
+// change itself is the visible feedback.
+static esp_err_t led_get_handler(httpd_req_t *req) {
+  char query[16];
+  char val[8];
+  if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK &&
+      httpd_query_key_value(query, "level", val, sizeof(val)) == ESP_OK) {
+    int level = atoi(val);
+    if (level < 0) {
+      level = 0;
+    } else if (level > 100) {
+      level = 100;
+    }
+    led_set_percent((uint8_t)level);
+  }
+
+  char buf[8];
+  int len = snprintf(buf, sizeof(buf), "%u%%", (unsigned int)s_led_percent);
   return send_text_response(req, buf, len, false);
 }
 
@@ -302,6 +354,7 @@ static const httpd_uri_t routes[] = {
     {.uri = "/api/blink", .method = HTTP_GET, .handler = blink_get_handler},
     {.uri = "/api/dice", .method = HTTP_GET, .handler = dice_get_handler},
     {.uri = "/api/chipinfo", .method = HTTP_GET, .handler = chipinfo_get_handler},
+    {.uri = "/api/led", .method = HTTP_GET, .handler = led_get_handler},
 };
 
 // Starts the HTTP server and registers every route in the table above.
@@ -330,17 +383,33 @@ void app_main(void) {
   }
   ESP_ERROR_CHECK(ret);
 
-  gpio_reset_pin(LED_PIN);
-  gpio_set_direction(LED_PIN, GPIO_MODE_OUTPUT);
+  ledc_timer_config_t ledc_timer = {
+      .speed_mode = LED_LEDC_MODE,
+      .timer_num = LED_LEDC_TIMER,
+      .duty_resolution = LED_LEDC_DUTY_RES,
+      .freq_hz = LED_LEDC_FREQ_HZ,
+      .clk_cfg = LEDC_AUTO_CLK,
+  };
+  ESP_ERROR_CHECK(ledc_timer_config(&ledc_timer));
+  ledc_channel_config_t ledc_channel = {
+      .gpio_num = LED_PIN,
+      .speed_mode = LED_LEDC_MODE,
+      .channel = LED_LEDC_CHANNEL,
+      .intr_type = LEDC_INTR_DISABLE,
+      .timer_sel = LED_LEDC_TIMER,
+      .duty = 0,
+      .hpoint = 0,
+  };
+  ESP_ERROR_CHECK(ledc_channel_config(&ledc_channel));
 
   if (!wifi_connect()) {
     // Gave up after WIFI_MAX_RETRY attempts. Common causes: wrong
     // SSID/password, or a 5GHz-only network the ESP32 can't see.
     ESP_LOGE(TAG, "Failed to connect to WiFi");
-    gpio_set_level(LED_PIN, 1); // solid LED = connection failed (visible even without Serial open)
-    return;                     // skip starting the HTTP server — there's no network to serve on
+    led_set_percent(100); // solid LED = connection failed (visible even without Serial open)
+    return;                // skip starting the HTTP server — there's no network to serve on
   }
-  gpio_set_level(LED_PIN, 0); // LED off = connected successfully
+  led_set_percent(0); // LED off = connected successfully
 
   start_webserver();
 }

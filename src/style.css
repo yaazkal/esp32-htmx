@@ -80,6 +80,11 @@ input[type="number"] {
   margin-bottom: 0.5rem;
 }
 
+input[type="range"] {
+  width: 100%;
+  accent-color: #38bdf8;
+}
+
 .grid {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
