@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ESP32 Hello World</title>
+    <link rel="stylesheet" href="/style.css" />
+    <script src="/htmx.min.js"></script>
+  </head>
+  <body>
+    <main class="card">
+      <header class="page-header">
+        <img
+          class="logo"
+          src="https://hacklaboriente.org/img/logosimbolo-light-background.svg"
+          alt="Hacklab Oriente logo"
+        />
+        <h1>Hacklab desktop buddy!</h1>
+      </header>
+      <p>Served by <code>esp_http_server</code> running on ESP-IDF.</p>
+
+      <div class="grid">
+        <div class="stat">
+          <h2>Uptime</h2>
+          <div class="value" id="uptime" hx-get="/api/uptime" hx-trigger="load" hx-swap="innerHTML">&hellip;</div>
+          <button hx-get="/api/uptime" hx-target="#uptime" hx-swap="innerHTML">Refresh</button>
+        </div>
+
+        <div class="stat">
+          <h2>Free heap</h2>
+          <div class="value" id="heap" hx-get="/api/heap" hx-trigger="load" hx-swap="innerHTML">&hellip;</div>
+          <button hx-get="/api/heap" hx-target="#heap" hx-swap="innerHTML">Refresh</button>
+        </div>
+
+        <div class="stat">
+          <h2>WiFi signal</h2>
+          <div class="value" id="wifi" hx-get="/api/wifi" hx-trigger="load, every 2s" hx-swap="innerHTML">&hellip;</div>
+        </div>
+
+        <div class="stat">
+          <h2>FreeRTOS tasks</h2>
+          <div class="value" id="tasks" hx-get="/api/tasks" hx-trigger="load" hx-swap="innerHTML">&hellip;</div>
+          <button hx-get="/api/tasks" hx-target="#tasks" hx-swap="innerHTML">Refresh</button>
+        </div>
+      </div>
+    </main>
+  </body>
+</html>

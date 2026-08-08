@@ -1,0 +1,4 @@
+.pio/
+.idea/
+.DS_Store
+*.piobkp
