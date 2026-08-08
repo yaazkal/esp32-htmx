@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>ESP32 Hello World</title>
+    <title>Hacklab desktop buddy</title>
     <link rel="stylesheet" href="/style.css" />
     <script src="/htmx.min.js"></script>
   </head>
@@ -15,9 +15,9 @@
           src="https://hacklaboriente.org/img/logosimbolo-light-background.svg"
           alt="Hacklab Oriente logo"
         />
-        <h1>Hacklab desktop buddy!</h1>
+        <h1>Hacklab desktop buddy</h1>
       </header>
-      <p>Served by <code>esp_http_server</code> running on ESP-IDF.</p>
+      <p class="chip-info" id="chip-info" hx-get="/api/chipinfo" hx-trigger="load" hx-swap="innerHTML">&hellip;</p>
 
       <div class="grid">
         <div class="stat">

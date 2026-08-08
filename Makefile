@@ -1,11 +1,14 @@
 ENV  ?= esp32doit-devkit-v1
 PORT ?= /dev/cu.usbserial-0001
 
-.PHONY: all build flash upload clean monitor
+.PHONY: all build flash upload clean monitor web-assets
 
 all: build
 
-build:
+web-assets:
+	scripts/gen-web-assets.sh
+
+build: web-assets
 	pio run -e $(ENV)
 
 flash upload: build

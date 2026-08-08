@@ -6,6 +6,7 @@
 #include "freertos/event_groups.h"
 #include "freertos/task.h"
 
+#include "esp_chip_info.h"
 #include "esp_event.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
@@ -258,6 +259,36 @@ static esp_err_t dice_get_handler(httpd_req_t *req) {
   return send_text_response(req, buf, len, true);
 }
 
+static const char *chip_model_name(esp_chip_model_t model) {
+  switch (model) {
+  case CHIP_ESP32:
+    return "ESP32";
+  case CHIP_ESP32S2:
+    return "ESP32-S2";
+  case CHIP_ESP32S3:
+    return "ESP32-S3";
+  case CHIP_ESP32C3:
+    return "ESP32-C3";
+  default:
+    return "unknown chip";
+  }
+}
+
+// Backs the chip-info banner above the grid. Static hardware facts (model,
+// revision, core count, radio features) read via esp_chip_info() — unlike
+// the cards below, this never changes at runtime, so it loads once on page
+// load with no refresh button and no LED flash.
+static esp_err_t chipinfo_get_handler(httpd_req_t *req) {
+  esp_chip_info_t info;
+  esp_chip_info(&info);
+  char buf[96];
+  int len = snprintf(buf, sizeof(buf), "%s rev v%d.%d &middot; %d core%s &middot; %s%s%s", chip_model_name(info.model),
+                      info.revision / 100, info.revision % 100, info.cores, info.cores == 1 ? "" : "s",
+                      (info.features & CHIP_FEATURE_WIFI_BGN) ? "WiFi" : "", (info.features & CHIP_FEATURE_BT) ? "+BT" : "",
+                      (info.features & CHIP_FEATURE_BLE) ? "+BLE" : "");
+  return send_text_response(req, buf, len, false);
+}
+
 // To add a future route: write a handler function and append an entry here
 // — start_webserver() below registers whatever is in this table.
 static const httpd_uri_t routes[] = {
@@ -270,6 +301,7 @@ static const httpd_uri_t routes[] = {
     {.uri = "/api/tasks", .method = HTTP_GET, .handler = tasks_get_handler},
     {.uri = "/api/blink", .method = HTTP_GET, .handler = blink_get_handler},
     {.uri = "/api/dice", .method = HTTP_GET, .handler = dice_get_handler},
+    {.uri = "/api/chipinfo", .method = HTTP_GET, .handler = chipinfo_get_handler},
 };
 
 // Starts the HTTP server and registers every route in the table above.
