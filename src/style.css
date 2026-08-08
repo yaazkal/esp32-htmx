@@ -63,6 +63,17 @@ button:hover {
   background: #7dd3fc;
 }
 
+input[type="number"] {
+  width: 100%;
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 6px;
+  color: #e2e8f0;
+  padding: 0.4rem 0.6rem;
+  font-size: 0.85rem;
+  margin-bottom: 0.5rem;
+}
+
 .grid {
   display: grid;
   grid-template-columns: repeat(2, 1fr);

@@ -42,6 +42,15 @@
           <div class="value" id="tasks" hx-get="/api/tasks" hx-trigger="load" hx-swap="innerHTML">&hellip;</div>
           <button hx-get="/api/tasks" hx-target="#tasks" hx-swap="innerHTML">Refresh</button>
         </div>
+
+        <div class="stat">
+          <h2>Blink LED</h2>
+          <div class="value" id="blink-result">&hellip;</div>
+          <input type="number" id="blink-count" name="count" min="1" max="10" value="3" />
+          <button hx-get="/api/blink" hx-include="#blink-count" hx-target="#blink-result" hx-swap="innerHTML">
+            Blink
+          </button>
+        </div>
       </div>
     </main>
   </body>

@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "freertos/FreeRTOS.h"
@@ -31,6 +32,9 @@
 
 // GPIO2 drives the onboard blue LED on the esp32doit-devkit-v1 board.
 #define LED_PIN GPIO_NUM_2
+
+// Upper bound on user-requested blink counts (see blink_get_handler below).
+#define BLINK_MAX_COUNT 10
 
 static const char *TAG = "hello-world";
 
@@ -156,7 +160,7 @@ static esp_err_t htmx_get_handler(httpd_req_t *req) {
   return ESP_OK;
 }
 
-// Each of the four handlers below backs one status card in index.html and
+// Each of the handlers below backs one status card in index.html and
 // returns just the value text as a plain HTML fragment — htmx swaps it
 // directly into the card's target element, so there's no JSON parsing (or
 // even a full page reload) involved on the client side. Uptime/heap/tasks
@@ -211,6 +215,38 @@ static esp_err_t tasks_get_handler(httpd_req_t *req) {
   return send_text_response(req, buf, len, true);
 }
 
+// Backs the "Blink LED" card. Takes a `count` query param (from the number
+// input in index.html, capped client-side at BLINK_MAX_COUNT) and blinks the
+// LED that many times, clamping server-side too since query params are
+// user-controlled input. Blinks the LED directly instead of going through
+// send_text_response's single-flash behavior, since this needs N on/off
+// cycles rather than one.
+static esp_err_t blink_get_handler(httpd_req_t *req) {
+  int count = 1;
+  char query[16];
+  char val[8];
+  if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK &&
+      httpd_query_key_value(query, "count", val, sizeof(val)) == ESP_OK) {
+    count = atoi(val);
+  }
+  if (count < 1) {
+    count = 1;
+  } else if (count > BLINK_MAX_COUNT) {
+    count = BLINK_MAX_COUNT;
+  }
+
+  for (int i = 0; i < count; i++) {
+    gpio_set_level(LED_PIN, 1);
+    vTaskDelay(pdMS_TO_TICKS(150));
+    gpio_set_level(LED_PIN, 0);
+    vTaskDelay(pdMS_TO_TICKS(150));
+  }
+
+  char buf[32];
+  int len = snprintf(buf, sizeof(buf), "Blinked %d time%s", count, count == 1 ? "" : "s");
+  return send_text_response(req, buf, len, false);
+}
+
 // To add a future route: write a handler function and append an entry here
 // — start_webserver() below registers whatever is in this table.
 static const httpd_uri_t routes[] = {
@@ -221,6 +257,7 @@ static const httpd_uri_t routes[] = {
     {.uri = "/api/heap", .method = HTTP_GET, .handler = heap_get_handler},
     {.uri = "/api/wifi", .method = HTTP_GET, .handler = wifi_get_handler},
     {.uri = "/api/tasks", .method = HTTP_GET, .handler = tasks_get_handler},
+    {.uri = "/api/blink", .method = HTTP_GET, .handler = blink_get_handler},
 };
 
 // Starts the HTTP server and registers every route in the table above.
