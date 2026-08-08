@@ -38,7 +38,7 @@
 // Upper bound on user-requested blink counts (see blink_get_handler below).
 #define BLINK_MAX_COUNT 10
 
-static const char *TAG = "hello-world";
+static const char *TAG = "H< Buddy";
 
 // FreeRTOS event group used to block app_main() until WiFi either connects
 // or gives up. The WiFi driver runs in its own background tasks and reports
